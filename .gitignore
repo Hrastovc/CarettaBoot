@@ -1,0 +1,11 @@
+
+CarettaBoot/Debug/*
+!CarettaBoot/Debug/Makefile
+
+CarettaBoot/Release/*
+!CarettaBoot/Release/Makefile
+
+*.atsuo
+
+doxygen/output
+CarettaBoot_ReferenceManual.pdf
