@@ -28,11 +28,6 @@
 /****************************************************************************************
 * Macro definitions
 ****************************************************************************************/
-#define BOOTEND_FUSE               (0x02)
-#define BOOT_SIZE                  (BOOTEND_FUSE * 0x100)
-#define MAPPED_APPLICATION_START   (MAPPED_PROGMEM_START + BOOT_SIZE)
-#define MAPPED_APPLICATION_SIZE    (MAPPED_PROGMEM_SIZE  - BOOT_SIZE)
-
 #define CARETTABOOT_MAJVER 0
 #define CARETTABOOT_MINVER 1
 
@@ -68,7 +63,6 @@ typedef union {
 ****************************************************************************************/
 __attribute__((naked)) __attribute__((section(".ctors"))) void bootloader(void)
 {
-  
   /* Initialize system for AVR GCC support, expects r1 = 0 */
   asm volatile("clr r1");
   
@@ -81,6 +75,7 @@ __attribute__((naked)) __attribute__((section(".ctors"))) void bootloader(void)
   
   uint8_t ch;
   uint8_t length;
+  uint8_t memtype;
   addr16_t address;
   
   watchdogConfig(WDT_PERIOD_1KCLK_gc);
@@ -95,8 +90,8 @@ __attribute__((naked)) __attribute__((section(".ctors"))) void bootloader(void)
   USART0_CTRLB = USART_RXEN_bm | USART_TXEN_bm;
   PORTA_DIRSET = PIN6_bm;
   
-  while(1) {
-    
+  for(;;)
+  {
     ch = readWrite();
     
     /*  */
@@ -112,11 +107,10 @@ __attribute__((naked)) __attribute__((section(".ctors"))) void bootloader(void)
     /*  */
     else if(ch == Cmnd_STK_SET_PARAMETER)
     {
-      ch = readWrite();
-      if(ch == Parm_STK_DEVICE)
+      if(readWrite() == Parm_STK_DEVICE)
       {
-        ch = read();
-        writeUserRow(30, --ch);
+        ch = read() - 1;
+        writeUserRow(30, ch);
         write(ch);
       }
       syncResponse();
@@ -167,7 +161,6 @@ __attribute__((naked)) __attribute__((section(".ctors"))) void bootloader(void)
     {
       address.bytes[0] = readWrite();
       address.bytes[1] = readWrite();
-      address.word += MAPPED_PROGMEM_START;
       syncResponse();
     }
     
@@ -188,8 +181,9 @@ __attribute__((naked)) __attribute__((section(".ctors"))) void bootloader(void)
     {
       readWrite();
       length = readWrite();
-      uint8_t memtype = readWrite();
-      if(memtype != 'F') while(1);
+      memtype = readWrite();
+      if(memtype == 'F') address.word += MAPPED_PROGMEM_START;
+      if(memtype == 'E') address.word += MAPPED_EEPROM_START;
       do *(address.bptr++) = readWrite();
       while(--length);
       syncResponse();
@@ -220,8 +214,15 @@ __attribute__((naked)) __attribute__((section(".ctors"))) void bootloader(void)
     else if(ch == Cmnd_STK_LEAVE_PROGMODE)
     {
       syncResponse();
-      if(doCRCcheck()) writeUserRow(31, 0xEA);
-      else while(1);
+      if(!doCRCcheck()) while(1);
+      writeUserRow(31, 0xEA);
+    }
+    
+    /* Go to bootloader command */
+    else if(ch == 'b')
+    {
+      /* Do not send anything, downstream bus is configured as 9O1! */
+      while(1);
     }
     
     /*  */
@@ -254,11 +255,12 @@ void write(uint8_t ch)
 ****************************************************************************************/
 uint8_t read(void)
 {
-  while(!(USART0_STATUS & USART_RXCIF_bm))
+  do
   {
     if(!(AC0_STATUS & AC_STATE_bm)) PORTA_PIN7CTRL = 0;
     else PORTA_PIN7CTRL = PORT_INVEN_bm;
   }
+  while(!(USART0_STATUS & USART_RXCIF_bm));
   asm("wdr");
   return USART0_RXDATAL;
 } /*** end of read ***/
@@ -307,9 +309,10 @@ void readMultiple(uint8_t count)
 ****************************************************************************************/
 void syncResponse(void)
 {
-  if (readWrite() != Sync_CRC_EOP)
+  if(readWrite() != Sync_CRC_EOP)
   {
-    _PROTECTED_WRITE(RSTCTRL_SWRR, RSTCTRL_SWRE_bm);
+    watchdogConfig(WDT_PERIOD_8CLK_gc);
+    while(1);
   }
   writeIfBot(Resp_STK_INSYNC);
 } /*** end of syncResponse ***/
@@ -322,7 +325,7 @@ void syncResponse(void)
 ****************************************************************************************/
 void watchdogConfig(uint8_t val)
 {
-  while(WDT.STATUS & WDT_SYNCBUSY_bm);
+  while(WDT_STATUS & WDT_SYNCBUSY_bm);
   _PROTECTED_WRITE(WDT_CTRLA, val);
 } /*** end of watchdogConfig ***/
 
@@ -347,7 +350,7 @@ void writeUserRow(uint8_t offset, uint8_t val)
 void writePageSPM(void)
 {
   _PROTECTED_WRITE_SPM(NVMCTRL_CTRLA, NVMCTRL_CMD_PAGEERASEWRITE_gc);
-  while(NVMCTRL_STATUS & NVMCTRL_FBUSY_bm);
+  while(NVMCTRL_STATUS & (NVMCTRL_FBUSY_bm | NVMCTRL_EEBUSY_bm));
 } /*** end of writePageSPM ***/
 
 
